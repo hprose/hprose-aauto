@@ -1,0 +1,1641 @@
+//.. 高性能远程对象服务引擎
+/**********************************************************\
+|                                                          |
+|                          hprose                          |
+|                                                          |
+| Official WebSite: http://www.hprose.com/                 |
+|                   http://www.hprose.net/                 |
+|                   http://www.hprose.org/                 |
+|                                                          |
+\**********************************************************/
+
+/**********************************************************\
+ *                                                        *
+ * hprose/_.aau                                           *
+ *                                                        *
+ * Hprose library for AAuto Quicker                       *
+ *                                                        *
+ * LastModified: Feb 14, 2014                             *
+ * Author: Ma Bingyao <andot@hprose.com>                  *
+ *                                                        *
+\**********************************************************/
+
+import inet.whttp;
+import inet.urlpart;
+import thread.table;
+import thread.command;
+import thread.manage;
+
+namespace hprose {
+
+    Normal = 0;
+    Serialized = 1;
+    Raw = 2;
+    RawWithEndTag = 3;
+    
+    class Filter {
+        ctor() {};
+        inputFilter = function(data) {
+            return data;
+        };
+        outputFilter = function(data) {
+            return data;
+        };
+    }
+
+    var sub = ..string.sub;
+    var join = ..string.join;
+    var indexAny = ..string.indexAny;
+    var pack = ..string.pack;
+    var format = ..string.format;
+    var push = ..table.push;
+    var time = ..time;
+    var count = ..table.count;
+    var istime = ..time.istime;
+    var NaN = -(0/0);
+    var Inf = -(..math.log(0));
+
+    ulen = function(str) {
+        var len = #str;
+        for (i = 1; #str; 1) {
+            var c = str[i];
+            select(c >>> 4) {
+                case 0,1,2,3,4,5,6,7 {
+                    // 0xxx xxxx
+                }
+                case 12,13 {
+                    // 110x xxxx  10xx xxxx
+                    if ((str[i + 1] >>> 6) != 2) return -1;
+                    i += 1;
+                    len -= 1;
+                }
+                case 14 {
+                    // 1110 xxxx  10xx xxxx  10xx xxxx
+                    if ((str[i + 1] >>> 6) != 2) return -1;
+                    if ((str[i + 2] >>> 6) != 2) return -1;
+                    i += 2;
+                    len -= 2;
+                }
+                case 15 {
+                    // 1111 0xxx  10xx xxxx  10xx xxxx  10xx xxxx
+                    if ((c & 0xf) <= 4) {
+                        i += 1;
+                        var c2 = str[i];
+                        if ((c2 >>> 6) != 2) return -1;
+                        i += 1;
+                        var c3 = str[i];
+                        if ((c3 >>> 6) != 2) return -1;
+                        i += 1;
+                        var c4 = str[i];
+                        if ((c4 >>> 6) != 2) return -1;
+                        var s = ((c & 0x07) << 18) |
+                               ((c2 & 0x3f) << 12) |
+                               ((c3 & 0x3f) << 6)  |
+                                (c4 & 0x3f) - 0x10000;
+                        if ((0 <= s) && (s < 0xfffff)) {
+                            len -= 2;
+                            continue;
+                        }
+                    }
+                    return -1;
+
+                }
+                else {
+                    return -1;
+                }
+            }
+        }
+        return len;
+    };
+
+    var ulen = ..hprose.ulen;
+
+    class InputStream {
+        ctor(buf) {
+            if (type(buf) !== type.string) error("buf must be a string.");
+            var pos = 1;
+            var length = #buf;
+        };
+        getc = function() {
+            var c = buf[[pos]];
+            pos += 1;
+            return c;
+        };
+        read = function(len) {
+            var b = sub(buf, pos, pos + len - 1);
+            this.skip(len);
+            return b;
+        };
+        readall = function() {
+            return buf;
+        };
+        skip = function(n) {
+            pos += n;
+        };
+        readuntil = function(tag) {
+            var bp = pos;
+            var c = buf[[pos]];
+            pos += 1;
+            while((c != tag) && (pos != length)) {
+                c = buf[[pos]];
+                pos += 1;
+            }
+            var ep = pos - 1;
+            if (c == tag) ep -= 1;
+            if (ep - bp < 0) return '';
+            return sub(buf, bp, ep);
+        };
+        readUTF8String = function(len) {
+            var p = pos;
+            for (i = 1; len; 1) {
+                var c = buf[pos];
+                select(c >>> 4) {
+                    case 0,1,2,3,4,5,6,7 {
+                        // 0xxx xxxx
+                        pos += 1;
+                    }
+                    case 12,13 {
+                        // 110x xxxx  10xx xxxx
+                        pos += 2;
+                    }
+                    case 14 {
+                        // 1110 xxxx  10xx xxxx  10xx xxxx
+                        pos += 3;
+                    }
+                    case 15 {
+                        // 1111 0xxx  10xx xxxx  10xx xxxx  10xx xxxx
+                        pos += 1;
+                        if ((c & 0xf) <= 4) {
+                            var c2 = buf[pos];
+                            pos += 1;
+                            var c3 = buf[pos];
+                            pos += 1;
+                            var c4 = buf[pos];
+                            pos += 1;
+                            var s = ((c & 0x07) << 18) |
+                                   ((c2 & 0x3f) << 12) |
+                                   ((c3 & 0x3f) << 6)  |
+                                    (c4 & 0x3f) - 0x10000;
+                            if ((0 <= s) && (s < 0xfffff)) {
+                                i += 1;
+                                continue;
+                            }
+                        }
+                        error("bad utf-8 encoding");
+
+                    }
+                    else {
+                        error("bad utf-8 encoding");
+                    }
+                }
+            }
+            return sub(buf, p, pos - 1);
+        };
+    }
+    class OutputStream {
+        ctor(str = '') {
+            var buf = {str};
+        };
+        write = function(...) {
+            push(buf, ...);
+        };
+        mark = function() {
+            str = join(buf);
+        };
+        reset = function() {
+            buf = {str};
+        };
+        clear = function() {
+            buf = {};
+        };
+        @{
+            _tostring = function() {
+                return join(buf);
+            };
+        }
+    }
+    namespace ClassManager {
+        var classCache = {};
+        var aliasCache = {};
+        register = function(cls, alias) {
+            classCache[[alias]] = cls;
+            aliasCache[[cls]] = alias;
+        };
+        getClassAlias = function(cls) {
+            return aliasCache[[cls]];
+        };
+        getClass = function(alias) {
+            return classCache[[alias]];
+        };
+    }
+
+    /* Serialize Tags */
+    TagInteger = 'i';
+    TagLong = 'l';
+    TagDouble = 'd';
+    TagNull = 'n';
+    TagEmpty = 'e';
+    TagTrue = 't';
+    TagFalse = 'f';
+    TagNaN = 'N';
+    TagInfinity = 'I';
+    TagDate = 'D';
+    TagTime = 'T';
+    TagUTC = 'Z';
+    TagBytes = 'b';
+    TagUTF8Char = 'u';
+    TagString = 's';
+    TagGuid = 'g';
+    TagList = 'a';
+    TagMap = 'm';
+    TagClass = 'c';
+    TagObject = 'o';
+    TagRef = 'r';
+    /* Serialize Marks */
+    TagPos = '+';
+    TagNeg = '-';
+    TagSemicolon = ';';
+    TagOpenbrace = '{';
+    TagClosebrace = '}';
+    TagQuote = '"';
+    TagPoint = '.';
+    /* Protocol Tags */
+    TagFunctions = 'F';
+    TagCall = 'C';
+    TagResult = 'R';
+    TagArgument = 'A';
+    TagError = 'E';
+    TagEnd = 'z';
+
+    var getClass = function(classname) {
+        var cls = ..hprose.ClassManager.getClass(classname);
+        if (cls) return cls;
+        cls = class { @{ _type = classname } };
+        ..hprose.ClassManager.register(cls, classname);
+        return cls;
+    };
+    var readNumber = function(stream, tag){
+        var s = stream.readuntil(tag);
+        if (#s == 0) return 0;
+        return (tonumber(s, 10));
+    };
+    class RawReader {
+        ctor(stream) {
+            this.stream = stream;
+        };
+        unexpectedTag = function(tag, expectTags) {
+            select(tag) {
+                case null {
+                    error('No byte found in stream');
+                }
+                else {
+                    if (expectTags) {
+                        error("tag '" ++ expectTags ++ "' expected, but '" ++ tag ++ "' found in stream");
+                    }
+                    else {
+                        error("Unexpected serialize tag '" ++ tag ++ "' in stream");
+                    }
+                }
+            }
+        };
+        readRaw = function(ostream, tag) {
+            ostream := ..hprose.OutputStream();
+            tag := stream.getc();
+            ostream.write(tag);
+            select(tag) {
+                case '0';'9' {
+                }
+                case ..hprose.TagNull,..hprose.TagEmpty,..hprose.TagTrue,..hprose.TagFalse,..hprose.TagNaN {
+                }
+                case ..hprose.TagInfinity {
+                    ostream.write(stream.getc());
+                }
+                case ..hprose.TagInteger,..hprose.TagLong,..hprose.TagDouble,..hprose.TagRef {
+                    this.readNumberRaw(ostream);
+                }
+                case ..hprose.TagDate,..hprose.TagTime {
+                    this.readDateTimeRaw(ostream);
+                }
+                case ..hprose.TagUTF8Char {
+                    this.readUTF8CharRaw(ostream);
+                }
+                case ..hprose.TagBytes {
+                    this.readBytesRaw(ostream);
+                }
+                case ..hprose.TagString {
+                    this.readStringRaw(ostream);
+                }
+                case ..hprose.TagGuid {
+                    this.readGuidRaw(ostream);
+                }
+                case ..hprose.TagList,..hprose.TagMap,..hprose.TagObject {
+                    this.readComplexRaw(ostream);
+                }
+                case ..hprose.TagClass {
+                    this.readComplexRaw(ostream);
+                    this.readRaw(ostream);
+                }
+                case ..hprose.TagError {
+                    this.readRaw(ostream);
+                }
+                else {
+                    this.unexpectedTag(tag);
+                }
+            }
+            return ostream;
+        };
+        readNumberRaw = function(ostream) {
+            var tag;
+            do {
+                tag = stream.getc();
+                ostream.write(tag);
+            } while (tag != ..hprose.TagSemicolon);
+        };
+        readDateTimeRaw = function(ostream) {
+            var tag;
+            do {
+                tag = stream.getc();
+                ostream.write(tag);
+            } while ((tag != ..hprose.TagSemicolon) && (tag != ..hprose.TagUTC));
+        };
+        readUTF8CharRaw = function(ostream) {
+            ostream.write(stream.readUTF8String(1));
+        };
+        readBytesRaw = function(ostream) {
+            var count = 0;
+            var tag = '0';
+            do {
+                count *= 10;
+                count += tag[1] - 48;
+                tag = stream.getc();
+                ostream.write(tag);
+            } while (tag != ..hprose.TagQuote);
+            ostream.write(stream.read(count + 1));
+        };
+        readStringRaw = function(ostream) {
+            var count = 0;
+            var tag = '0';
+            do {
+                count *= 10;
+                count += tag[1] - 48;
+                tag = stream.getc();
+                ostream.write(tag);
+            } while (tag != ..hprose.TagQuote);
+            ostream.write(stream.readUTF8String(count + 1));
+        };
+        readGuidRaw = function(ostream) {
+            ostream.write(stream.read(38));
+        };
+        readComplexRaw = function(ostream) {
+            var tag;
+            do {
+                tag = stream.getc();
+                ostream.write(tag);
+            } while (tag != ..hprose.TagOpenbrace);
+            while ((tag = stream.getc()) != ..hprose.TagClosebrace) {
+                this.readRaw(ostream, tag);
+            }
+            ostream.write(tag);
+        };
+    }
+    class FakeReaderRefer {
+        set = function(val) {};
+        read = function(index) {
+            error("Unexpected serialize tag '" ++ ..hprose.TagRef ++ "' in stream");
+        };
+        reset = function(){};
+    }
+    class RealReaderRefer {
+        ctor() {
+            var ref = { @{ _weak = "v" } };
+        };
+        set = function(val) {
+            ref[[#ref + 1]] = val;
+        };
+        read = function(index) {
+            return ref[[index]];
+        };
+        reset = function() {
+            ref = { @{ _weak = "v" } };
+        };
+    }
+    class Reader {
+        ctor(stream, simple = false) {
+            this = ..hprose.RawReader(stream);
+            var refer = (simple ? ..hprose.FakeReaderRefer() : ..hprose.RealReaderRefer());
+            var classref = {};
+        };
+        _checkTag = function(expectTag, tag) {
+            if (tag != expectTag) this.unexpectedTag(tag, expectTag);
+        };
+        checkTag = function(expectTag) {
+            this._checkTag(expectTag, stream.getc());
+        };
+        _checkTags = function(expectTags, tag) {
+            if (!indexAny(expectTags, tag)) this.unexpectedTag(tag, expectTags);
+            return tag;
+        };
+        checkTags = function(expectTags) {
+            return this._checkTags(expectTags, stream.getc());
+        };
+        unserialize = function() {
+            var tag = stream.getc();
+            select(tag) {
+                case '0';'9' {
+                    return tag[1] - 48;
+                }
+                case ..hprose.TagInteger {
+                    return this.readIntegerWithoutTag();
+                }
+                case ..hprose.TagLong {
+                    return this.readLongWithoutTag();
+                }
+                case ..hprose.TagDouble {
+                    return this.readDoubleWithoutTag();
+                }
+                case ..hprose.TagNull {
+                    return null;
+                }
+                case ..hprose.TagEmpty {
+                    return '';
+                }
+                case ..hprose.TagTrue {
+                    return true;
+                }
+                case ..hprose.TagFalse {
+                    return false;
+                }
+                case ..hprose.TagNaN {
+                    return NaN;
+                }
+                case ..hprose.TagInfinity {
+                    return this.readInfinityWithoutTag();
+                }
+                case ..hprose.TagDate {
+                    return this.readDateWithoutTag();
+                }
+                case ..hprose.TagTime {
+                    return this.readTimeWithoutTag();
+                }
+                case ..hprose.TagBytes {
+                    return this.readBytesWithoutTag();
+                }
+                case ..hprose.TagUTF8Char {
+                    return this.readUTF8CharWithoutTag();
+                }
+                case ..hprose.TagString {
+                    return this.readStringWithoutTag();
+                }
+                case ..hprose.TagGuid {
+                    return this.readGuidWithoutTag();
+                }
+                case ..hprose.TagList {
+                    return this.readListWithoutTag();
+                }
+                case ..hprose.TagMap {
+                    return this.readMapWithoutTag();
+                }
+                case ..hprose.TagClass {
+                    this.readClass();
+                    return this.readObject();
+                }
+                case ..hprose.TagObject {
+                    return this.readObjectWithoutTag();
+                }
+                case ..hprose.TagRef {
+                    return this.readRef();
+                }
+                case ..hprose.TagError {
+                    error(this.readString());
+                }
+                else {
+                    this.unexpectedTag(tag);
+                }
+            }
+        };
+        readIntegerWithoutTag = function() {
+            return readNumber(stream, ..hprose.TagSemicolon);
+        };
+        readInteger = function() {
+            var tag = stream.getc();
+            select(tag) {
+                case '0';'9' {
+                    return tag[1] - 48;
+                }
+                case ..hprose.TagInteger {
+                    return this.readIntegerWithoutTag();
+                }
+                else {
+                    this.unexpectedTag(tag);
+                }
+            }
+        };
+        readLongWithoutTag = function() {
+            return stream.readuntil(..hprose.TagSemicolon);
+        };
+        readLong = function() {
+            var tag = stream.getc();
+            select(tag) {
+                case '0';'9' {
+                    return tag;
+                }
+                case ..hprose.TagInteger, ..hprose.TagLong {
+                    return this.readLongWithoutTag();
+                }
+                else {
+                    this.unexpectedTag(tag);
+                }
+            }
+        };
+        readDoubleWithoutTag = function() {
+            return readNumber(stream, ..hprose.TagSemicolon);
+        };
+        readDouble = function() {
+            var tag = stream.getc();
+            select(tag) {
+                case '0';'9' {
+                    return tag[1] - 48;
+                }
+                case ..hprose.TagInteger, ..hprose.TagLong, ..hprose.TagDouble {
+                    return this.readDoubleWithoutTag();
+                }
+                case ..hprose.TagNaN {
+                    return NaN;
+                }
+                case ..hprose.TagInfinity {
+                    return this.readInfinityWithoutTag();
+                }
+                else {
+                    this.unexpectedTag(tag);
+                }
+            }
+        };
+        readNaN = function() {
+            var tag = stream.getc();
+            select(tag) {
+                case ..hprose.TagNaN {
+                    return NaN;
+                }
+                else {
+                    this.unexpectedTag(tag);
+                }
+            }
+        };
+        readInfinityWithoutTag = function() {
+            if (stream.getc() == ..hprose.TagNeg) {
+                return -Inf;
+            }
+            else {
+                return Inf;
+            }
+        };
+        readInfinity = function() {
+            var tag = stream.getc();
+            select(tag) {
+                case ..hprose.TagInfinity {
+                    return this.readInfinityWithoutTag();
+                }
+                else {
+                    this.unexpectedTag(tag);
+                }
+            }
+        };
+        readNull = function() {
+            var tag = stream.getc();
+            select(tag) {
+                case ..hprose.TagNull {
+                    return null;
+                }
+                else {
+                    this.unexpectedTag(tag);
+                }
+            }
+        };
+        readEmpty = function() {
+            var tag = stream.getc();
+            select(tag) {
+                case ..hprose.TagEmpty {
+                    return '';
+                }
+                else {
+                    this.unexpectedTag(tag);
+                }
+            }
+        };
+        readBoolean = function() {
+            var tag = stream.getc();
+            select(tag) {
+                case ..hprose.TagTrue {
+                    return true;
+                }
+                case ..hprose.TagFalse {
+                    return false;
+                }
+                else {
+                    this.unexpectedTag(tag);
+                }
+            }
+        };
+        readDateWithoutTag = function() {
+            var year = tonumber(stream.read(4), 10);
+            var month = tonumber(stream.read(2), 10);
+            var day = tonumber(stream.read(2), 10);
+            var date;
+            var tag = stream.getc();
+            if (tag == ..hprose.TagTime) {
+                var hour = tonumber(stream.read(2), 10);
+                var minute = tonumber(stream.read(2), 10);
+                var second = tonumber(stream.read(2), 10);
+                var millisecond = 0;
+                tag = stream.getc();
+                if (tag == ..hprose.TagPoint) {
+                    millisecond = tonumber(stream.read(3), 10);
+                    tag = stream.getc();
+                    if ((tag >= '0') && (tag <= '9')) {
+                        stream.skip(2);
+                        tag = stream.getc();
+                        if ((tag >= '0') && (tag <= '9')) {
+                            stream.skip(2);
+                            tag = stream.getc();
+                        }
+                    }
+                }
+                if (tag == ..hprose.TagUTC) {
+                    date = time(null, "!%c");
+                }
+                else {
+                    date = time();
+                }
+                date.hour = hour;
+                date.minute = minute;
+                date.second = second;
+                date.milliseconds = millisecond;
+            }
+            else if (tag == ..hprose.TagUTC) {
+                date = time(null, "!%c");
+            }
+            else {
+                date = time();
+            }
+            date.year = year;
+            date.month = month;
+            date.day = day;
+            date.update();
+            refer.set(date);
+            return date;
+        };
+        readDate = function() {
+            var tag = stream.getc();
+            select(tag) {
+                case ..hprose.TagRef {
+                    return this.readRef();
+                }
+                case ..hprose.TagDate {
+                    return this.readDateWithoutTag();
+                }
+                else {
+                    this.unexpectedTag(tag);
+                }
+            }
+        };
+        readTimeWithoutTag = function() {
+            var hour = tonumber(stream.read(2), 10);
+            var minute = tonumber(stream.read(2), 10);
+            var second = tonumber(stream.read(2), 10);
+            var millisecond = 0;
+            var tag = stream.getc();
+            if (tag == ..hprose.TagPoint) {
+                millisecond = tonumber(stream.read(3), 10);
+                tag = stream.getc();
+                if ((tag >= '0') && (tag <= '9')) {
+                    stream.skip(2);
+                    tag = stream.getc();
+                    if ((tag >= '0') && (tag <= '9')) {
+                        stream.skip(2);
+                        tag = stream.getc();
+                    }
+                }
+            }
+            var date;
+            if (tag == ..hprose.TagUTC) {
+                date = time(null, "!%c");
+            }
+            else {
+                date = time();
+            }
+            date.year = 1970;
+            date.month = 1;
+            date.day = 1;
+            date.hour = hour;
+            date.minute = minute;
+            date.second = second;
+            date.milliseconds = millisecond;
+            date.update();
+            refer.set(date);
+            return date;
+        };
+        readTime = function() {
+            var tag = stream.getc();
+            select(tag) {
+                case ..hprose.TagRef {
+                    return this.readRef();
+                }
+                case ..hprose.TagTime {
+                    return this.readTimeWithoutTag();
+                }
+                else {
+                    this.unexpectedTag(tag);
+                }
+            }
+        };
+        readBytesWithoutTag = function() {
+            var count = readNumber(stream, ..hprose.TagQuote);
+            var bytes = stream.read(count);
+            stream.skip(1);
+            refer.set(bytes);
+            return bytes;
+        };
+        readBytes = function() {
+            var tag = stream.getc();
+            select(tag) {
+                case ..hprose.TagRef {
+                    return this.readRef();
+                }
+                case ..hprose.TagBytes {
+                    return this.readBytesWithoutTag();
+                }
+                else {
+                    this.unexpectedTag(tag);
+                }
+            }
+        };
+        readUTF8CharWithoutTag = function() {
+            return stream.readUTF8String(1);
+        };
+        readUTF8Char = function() {
+            var tag = stream.getc();
+            select(tag) {
+                case ..hprose.TagUTF8Char {
+                    return this.readUTF8CharWithoutTag();
+                }
+                else {
+                    this.unexpectedTag(tag);
+                }
+            }
+        };
+        _readString = function() {
+            var count = readNumber(stream, ..hprose.TagQuote);
+            var s = stream.readUTF8String(count);
+            stream.skip(1);
+            return s;
+        };
+        readStringWithoutTag = function() {
+            var str = this._readString();
+            refer.set(str);
+            return str;
+        };
+        readString = function() {
+            var tag = stream.getc();
+            select(tag) {
+                case ..hprose.TagRef {
+                    return this.readRef();
+                }
+                case ..hprose.TagString {
+                    return this.readStringWithoutTag();
+                }
+                else {
+                    this.unexpectedTag(tag);
+                }
+            }
+        };
+        _readGuid = function() {
+            stream.skip(1);
+            var guid = stream.read(36);
+            stream.skip(1);
+            refer.set(guid);
+            return guid;
+        };
+        readGuid = function() {
+            var tag = stream.getc();
+            select(tag) {
+                case ..hprose.TagRef {
+                    return this.readRef();
+                }
+                case ..hprose.TagGuid {
+                    return this.readGuidWithoutTag();
+                }
+                else {
+                    this.unexpectedTag(tag);
+                }
+            }
+        };
+        readListWithoutTag = function() {
+            var list = {};
+            refer.set(list);
+            var count = readNumber(stream, ..hprose.TagOpenbrace);
+            for (i = 1; count; 1) {
+                list[[i]] = this.unserialize();
+            }
+            stream.skip(1);
+            return list;
+        };
+        readList = function() {
+            var tag = stream.getc();
+            select(tag) {
+                case ..hprose.TagRef {
+                    return this.readRef();
+                }
+                case ..hprose.TagList {
+                    return this.readListWithoutTag();
+                }
+                else {
+                    this.unexpectedTag(tag);
+                }
+            }
+        };
+        readMapWithoutTag = function() {
+            var map = {};
+            refer.set(map);
+            var count = readNumber(stream, ..hprose.TagOpenbrace);
+            for (i = 1; count; 1) {
+                var key = this.unserialize();
+                var value = this.unserialize();
+                map[[key]] = value;
+            }
+            stream.skip(1);
+            return map;
+        };
+        readMap = function() {
+            var tag = stream.getc();
+            select(tag) {
+                case ..hprose.TagRef {
+                    return this.readRef();
+                }
+                case ..hprose.TagMap {
+                    return this.readMapWithoutTag();
+                }
+                else {
+                    this.unexpectedTag(tag);
+                }
+            }
+        };
+        readObjectWithoutTag = function() {
+            var clsinfo = classref[[readNumber(stream, ..hprose.TagOpenbrace) + 1]];
+            var obj = clsinfo[["cls"]]();
+            refer.set(obj);
+            for (i = 1; clsinfo[["count"]]; 1) {
+                obj[[clsinfo[["fields"]][[i]]]] = this.unserialize();
+            }
+            stream.skip(1);
+            return obj;
+        };
+        readObject = function() {
+            var tag = stream.getc();
+            select(tag) {
+                case ..hprose.TagRef {
+                    return this.readRef();
+                }
+                case ..hprose.TagClass {
+                    this.readClass();
+                    return this.readObject();
+                }
+                case ..hprose.TagObject {
+                    return this.readObjectWithoutTag();
+                }
+                else {
+                    this.unexpectedTag(tag);
+                }
+            }
+        };
+        readClass = function() {
+            var classname = this._readString();
+            var count = readNumber(stream, ..hprose.TagOpenbrace);
+            var fields = {};
+            for (i = 1; count; 1) {
+                fields[[i]] = this.readString();
+            }
+            stream.skip(1);
+            var clsinfo = {};
+            clsinfo[["cls"]] = getClass(classname);
+            clsinfo[["count"]] = count;
+            clsinfo[["fields"]] = fields;
+            classref[[#classref + 1]] = clsinfo;
+        };
+        readRef = function() {
+            return refer.read(readNumber(stream, ..hprose.TagSemicolon) + 1);
+        };
+        reset = function() {
+            classref = {};
+            refer.reset();
+        };
+    }
+    var isDigit = function(value) {
+        select(value) {
+            case 0;9 {
+                return true;
+            }
+            case '0';'9' {
+                return true;
+            }
+        }
+        return false;
+    };
+    var isInteger = function(value) {
+        for (i = (value[[1]] == '-' ? 2 : 1); #value; 1) {
+            if (!isDigit(value[[i]])) return false;
+        }
+        return (value != '-');
+    };
+    var isInt32 = function(value) {
+        var s = tostring(value);
+        var l = #s;
+        return ((l < 12) && isInteger(s) && !(value < -2147483648 || value > 2147483647));
+    };
+    var getClassName = function(obj) {
+        var typename = obj@._type;
+        var cls = eval(typename);
+        var classname = ..hprose.ClassManager.getClassAlias(cls);
+        if (classname) return classname;
+        ..hprose.ClassManager.register(cls, typename);
+        return typename;
+    };
+    var isPosInf = function(value) {
+        return Inf == value;
+    };
+    var isNegInf = function(value) {
+        return -Inf == value;
+    };
+    var isFinite = function(value) {
+        return ((Inf > value) && (value > -Inf));
+    };
+    var isNaN = function(value) {
+        return value !== value;
+    };
+    var isobject = function(value) {
+        var cls, struct, typename = type(value);
+        typename := struct;
+        if (cls === "table") {
+            var c;
+            try {
+                c = eval(typename);
+            }
+            catch(e){
+                c = null;
+            }
+            if (type(c) === "class") return true;
+        }
+        return false;
+    };
+    var isarray = function(value) {
+        return ((type(value) === type.table) && (count(value) === #value))
+    };
+    class FakeWriterRefer {
+        set = function(val) {};
+        write = function(stream, val) { return false; };
+        reset = function() {};
+    }
+    class RealWriterRefer {
+        ctor() {
+            var ref = { @{ _weak = "k" } };
+            var refcount = 0;
+        };
+        set = function(val) {
+        	ref[[val]] =  refcount;
+            refcount += 1;
+        };
+        write = function(stream, val) {
+            var index = ref[[val]];
+            if (index !== null) {
+                stream.write(..hprose.TagRef, index, ..hprose.TagSemicolon);
+                return true;
+            }
+            return false;
+        };
+        reset = function() {
+            ref = { @{ _weak = "k" } };
+            refcount = 0;
+        };
+    }
+    class Writer {
+        ctor(stream, simple = false) {
+            this.stream = stream;
+            var classref = {};
+            var fieldsref = {};
+            var refer = (simple ? ..hprose.FakeWriterRefer() : ..hprose.RealWriterRefer());
+        };
+        serialize = function (variable) {
+            select (type(variable)) {
+                case type.null {
+                    this.writeNull();
+                }
+                case type.boolean {
+                    this.writeBoolean(variable);
+                }
+                case type.number {
+                    if (isDigit(variable)) {
+                        stream.write(pack(variable + 48));
+                    }
+                    elseif (isInt32(variable)) {
+                        this.writeInteger(variable)
+                    }
+                    else {
+                        this.writeDouble(variable);
+                    }
+                }
+                case type.string {
+                    var len = ulen(variable);
+                    if (len < 0) {
+                        this.writeBytesWithRef(variable);
+                    }
+                    elseif (len == 0) {
+                        this.writeEmpty();
+                    }
+                    elseif (len == 1) {
+                        this.writeUTF8Char(variable);
+                    }
+                    else {
+                        this.writeStringWithRef(variable, len);
+                    }
+                }
+                case type.table {
+                    if (istime(variable)) {
+                        this.writeDateTimeWithRef(variable);
+                    }
+                    elseif (isarray(variable)) {
+                        this.writeListWithRef(variable);
+                    }
+                    elseif (isobject(variable)) {
+                        this.writeObjectWithRef(variable);
+                    }
+                    else {
+                        this.writeMapWithRef(variable);
+                    }
+                }
+            }
+        };
+        writeInteger = function(i) {
+            stream.write(..hprose.TagInteger, tostring(i), ..hprose.TagSemicolon);
+        };
+        writeLong = function(l) {
+            stream.write(..hprose.TagLong, tostring(l), ..hprose.TagSemicolon);
+        };
+        writeDouble = function(d) {
+            if (isNaN(d)) {
+                this.writeNaN();
+            }
+            else if (isFinite(d)) {
+                stream.write(..hprose.TagDouble, tostring(d), ..hprose.TagSemicolon);
+            }
+            else {
+                this.writeInfinity(d > 0);
+            }
+        };
+        writeNaN = function() {
+            stream.write(..hprose.TagNaN);
+        };
+        writeInfinity = function(positive) {
+            stream.write(..hprose.TagInfinity, (positive ? ..hprose.TagPos : ..hprose.TagNeg));
+        };
+        writeNull = function() {
+            stream.write(..hprose.TagNull);
+        };
+        writeEmpty = function() {
+            stream.write(..hprose.TagEmpty);
+        };
+        writeBoolean = function(b) {
+            stream.write(b ? ..hprose.TagTrue : ..hprose.TagFalse);
+        };
+        writeDateTime = function(date) {
+            refer.set(date);
+            var year = format("%04i",date.year);
+            var month = format("%02i",date.month);
+            var day = format("%02i",date.day);
+            var hour = format("%02i",date.hour);
+            var minute = format("%02i",date.minute);
+            var second = format("%02i",date.second);
+            var millisecond = format("%03i",date.milliseconds);
+            var timezone = (date.format[[1]] == '!') ? ..hprose.TagUTC : ..hprose.TagSemicolon;
+
+            if ((hour == '00') && (minute == '00') &&
+                (second == '00') && (millisecond == '000')) {
+                stream.write(..hprose.TagDate, year, month, day, timezone);
+            }
+            else if ((year == '1970') && (month == '01') && (day == '01')) {
+                stream.write(..hprose.TagTime, hour, minute, second);
+                if (millisecond != '000') {
+                    stream.write(..hprose.TagPoint, millisecond);
+                }
+                stream.write(timezone);
+            }
+            else {
+                stream.write(..hprose.TagDate, year, month, day,
+                             ..hprose.TagTime, hour, minute, second);
+                if (millisecond != '000') {
+                    stream.write(..hprose.TagPoint, millisecond);
+                }
+                stream.write(timezone);
+            }
+        };
+        writeDateTimeWithRef = function(date) {
+            if (!refer.write(date)) this.writeDateTime(date);
+        };
+        writeBytes = function(bytes) {
+            refer.set(bytes);
+            stream.write(..hprose.TagBytes, (#bytes : ''), ..hprose.TagQuote, bytes, ..hprose.TagQuote);
+        };
+        writeBytesWithRef = function(bytes) {
+            if (!refer.write(bytes)) this.writeBytes(bytes);
+        }
+        writeUTF8Char = function(c) {
+            stream.write(..hprose.TagUTF8Char, c);
+        };
+        writeString = function(str, len) {
+            refer.set(str);
+            len := ulen(str);
+            if (len < 0) error("must be encoding in utf8.");
+            stream.write(..hprose.TagString, (len : ''), ..hprose.TagQuote, str, ..hprose.TagQuote);
+        };
+        writeStringWithRef = function(str, len) {
+            if (!refer.write(str)) this.writeString(str, len);
+        }
+        writeList = function(list) {
+            refer.set(list);
+            var count = #list;
+            stream.write(..hprose.TagList, (count : ''), ..hprose.TagOpenbrace);
+            for (i = 1; count; 1) {
+                this.serialize(list[[i]]);
+            }
+            stream.write(..hprose.TagClosebrace);
+        };
+        writeListWithRef = function(list) {
+            if (!refer.write(list)) this.writeList(list);
+        }
+        writeMap = function(map) {
+            refer.set(map);
+            var fields = {};
+            for (key, value in map) {
+                select(type(value)) {
+                    case type.null, type.boolean, type.number, type.string, type.table {
+                        fields[[#fields + 1]] = key;
+                    }
+                }
+            }
+            var count = #fields;
+            stream.write(..hprose.TagMap, (count : ''), ..hprose.TagOpenbrace);
+            for (i = 1; count; 1) {
+                this.serialize(fields[[i]]);
+                this.serialize(map[[fields[[i]]]]);
+            }
+            stream.write(..hprose.TagClosebrace);
+        };
+        writeMapWithRef = function(map) {
+            if (!refer.write(map)) this.writeMap(map);
+        }
+        writeObject = function(obj) {
+            var classname = getClassName(obj);
+            var fields;
+            var index = classref[[classname]];
+            if (index === null) {
+                fields = {};
+                for (key, value in obj) {
+                    select(type(value)) {
+                        case type.null, type.boolean, type.number, type.string, type.table {
+                            fields[[#fields + 1]] = tostring(key);
+                        }
+                    }
+                }
+                index = this.writeClass(classname, fields);
+            }
+            else {
+                fields = fieldsref[[index]];
+            }
+            stream.write(..hprose.TagObject, index - 1, ..hprose.TagOpenbrace);
+            refer.set(obj);
+            var count = #fields;
+            for (i = 1; count; 1) {
+                this.serialize(obj[[fields[[i]]]]);
+            }
+            stream.write(..hprose.TagClosebrace);
+        };
+        writeObjectWithRef = function(obj) {
+            if (!refer.write(obj)) this.writeObject(obj);
+        };
+        writeClass = function(classname, fields) {
+            var count = #fields;
+            var len = ulen(classname);
+            if (len < 0) error("class name must be encoding in utf8.");
+            stream.write(..hprose.TagClass, len, ..hprose.TagQuote, classname, ..hprose.TagQuote, (count : ''), ..hprose.TagOpenbrace);
+            for (i = 1; count; 1) {
+                this.writeString(fields[i]);
+            }
+            stream.write(..hprose.TagClosebrace);
+            var index = #fieldsref + 1;
+            classref[classname] = index;
+            fieldsref[index] = fields;
+            return index;
+        };
+        reset = function() {
+            classref = {};
+            fieldsref = {};
+            refer.reset();
+        };
+    }
+
+    serialize = function(variable, simple = false) {
+        var stream = ..hprose.OutputStream();
+        var writer = ..hprose.Writer(stream, simple);
+        writer.serialize(variable);
+        return tostring(stream);
+    }
+    unserialize = function(variable_representation, simple = false) {
+        var stream = ..hprose.InputStream(variable_representation);
+        var reader = ..hprose.Reader(stream, simple);
+        return reader.unserialize();
+    }
+
+    class DynamicMethod {
+        ctor(invoker, funcname) {
+        };
+        @{
+            _get = function(name) {
+                return ..hprose.DynamicMethod(invoker, funcname ++ "_" ++ name);
+            }
+            _call = function(...) {
+                var args = {...};
+                var callback = null;
+                var onerror = null;
+                var byRef = false;
+                var resultMode = 0;
+                var simple = false;
+                var count = #args;
+                if (type(args[[count]]) === type.boolean &&
+                    type(args[[count - 1]]) === type.number &&
+                    type(args[[count - 2]]) === type.boolean &&
+                    type(args[[count - 3]]) === type.function &&
+                    type(args[[count - 4]]) === type.function) {
+                    callback, onerror, byRef, resultMode, simple = ..table.pop(args, 5);
+                }
+                else if (type(args[[count]]) === type.boolean &&
+                         type(args[[count - 1]]) === type.number &&
+                         type(args[[count - 2]]) === type.function &&
+                         type(args[[count - 3]]) === type.function) {
+                    callback, onerror, resultMode, simple = ..table.pop(args, 4);
+                }
+                else if (type(args[[count]]) === type.number &&
+                         type(args[[count - 1]]) === type.boolean &&
+                         type(args[[count - 2]]) === type.function &&
+                         type(args[[count - 3]]) === type.function) {
+                    callback, onerror, byRef, resultMode = ..table.pop(args, 4);
+                }
+                else if (type(args[[count]]) === type.boolean &&
+                         type(args[[count - 1]]) === type.boolean &&
+                         type(args[[count - 2]]) === type.function &&
+                         type(args[[count - 3]]) === type.function) {
+                    callback, onerror, byRef, simple = ..table.pop(args, 4);
+                }
+                else if (type(args[[count]]) === type.boolean &&
+                         type(args[[count - 1]]) === type.function &&
+                         type(args[[count - 2]]) === type.function) {
+                    callback, onerror, byRef = ..table.pop(args, 3);
+                }
+                else if (type(args[[count]]) === type.number &&
+                         type(args[[count - 1]]) === type.function &&
+                         type(args[[count - 2]]) === type.function) {
+                    callback, onerror, resultMode = ..table.pop(args, 3);
+                }
+                else if (type(args[[count]]) === type.function &&
+                         type(args[[count - 1]]) === type.function) {
+                    callback, onerror = ..table.pop(args, 2);
+                }
+                else if (type(args[[count]]) === type.boolean &&
+                    type(args[[count - 1]]) === type.number &&
+                    type(args[[count - 2]]) === type.boolean &&
+                    type(args[[count - 3]]) === type.function) {
+                    callback, byRef, resultMode, simple = ..table.pop(args, 4);
+                }
+                else if (type(args[[count]]) === type.boolean &&
+                         type(args[[count - 1]]) === type.number &&
+                         type(args[[count - 2]]) === type.function) {
+                    callback, resultMode, simple = ..table.pop(args, 3);
+                }
+                else if (type(args[[count]]) === type.number &&
+                         type(args[[count - 1]]) === type.boolean &&
+                         type(args[[count - 2]]) === type.function) {
+                    callback, byRef, resultMode = ..table.pop(args, 3);
+                }
+                else if (type(args[[count]]) === type.boolean &&
+                         type(args[[count - 1]]) === type.boolean &&
+                         type(args[[count - 2]]) === type.function) {
+                    callback, byRef, simple = ..table.pop(args, 3);
+                }
+                else if (type(args[[count]]) === type.boolean &&
+                         type(args[[count - 1]]) === type.function) {
+                    callback, byRef = ..table.pop(args, 2);
+                }
+                else if (type(args[[count]]) === type.number &&
+                         type(args[[count - 1]]) === type.function) {
+                    callback, resultMode = ..table.pop(args, 2);
+                }
+                else if (type(args[[count]]) === type.function) {
+                    callback = ..table.pop(args);
+                }
+
+                return invoker.invoke(funcname, args, callback, onerror, byRef, resultMode, simple);
+            }
+        }
+    }
+    class DynamicProxy {
+        ctor(invoker) {
+        };
+        @{
+            _get = function(name) {
+                return ..hprose.DynamicMethod(invoker, name);
+            }
+        }
+    }
+
+    var threadManager = ..thread.manage();
+
+    class Client {
+        ctor(uri) {
+            this.uri = uri;
+            this.filter =  ..hprose.Filter();
+            this.onerror = function(){};
+            this.send = null;
+        };
+        invoke = function(name, args, callback, onerror, byRef = false, resultMode = 0, simple = false) {
+            if (callback == null) {
+                var ok, result = call(owner.syncInvoke, owner, name, args, byRef, resultMode, simple, owner.send, owner.filter.inputFilter, owner.filter.outputFilter);
+                if (ok) {
+                    return result;
+                }
+                else {
+                    error(result);
+                }
+            }
+            else {
+                if (type(callback) != type.function) {
+                    error("callback must be a function.");
+                }
+                onerror := owner.onerror;
+                if (type(onerror) != type.function) {
+                    error("onerror must be a function.");
+                }
+                var tab = ..thread.table("f9ccdb4e-61c8-4dc3-8bbb-0963910e42de");
+                tab.set('hproseClient', owner);
+                tab.set('syncInvoke', owner.syncInvoke);
+                tab.set('send', owner.send);
+                tab.set('inputFilter', owner.filter.inputFilter);
+                tab.set('outputFilter', owner.filter.outputFilter);
+                var command = ..thread.command();
+                command.callback = callback;
+                command.onerror = onerror;
+                threadManager.create(function(name, args, callback, onerror, byRef, resultMode, simple, hwnd) {
+                    import hprose;
+                    import inet.whttp;
+                    import inet.urlpart;
+                    import thread.table;
+                    import thread.command;
+
+                    var errstr = null;
+                    var tab = ..thread.table('f9ccdb4e-61c8-4dc3-8bbb-0963910e42de');
+                    var ok, result = call(tab.get('syncInvoke'), tab.get('hproseClient'), name, args, byRef, resultMode, simple, tab.get('send'), tab.get('inputFilter'), tab.get('outputFilter'));
+                    if (ok) {
+                        ..thread.command.post(hwnd, "callback", result, args);
+                    }
+                    else {
+                        ..thread.command.post(hwnd, "onerror", name, result);
+                    }
+                }, name, args, callback, onerror, byRef, resultMode, simple, command._form.hwnd);
+            }
+        };
+        useService = function(uri) {
+            if (uri !== null) this.uri = uri;
+            return ..hprose.DynamicProxy(this);
+        };
+        syncInvoke = function(name, args, byRef, resultMode, simple, send, inputFilter, outputFilter) {
+            args := {};
+            var stream = ..hprose.OutputStream();
+            stream.write(..hprose.TagCall);
+            var hproseWriter = ..hprose.Writer(stream, simple);
+            hproseWriter.writeString(name);
+            if ((#args > 0) || byRef) {
+                hproseWriter.reset();
+                hproseWriter.writeList(args);
+                if (byRef) hproseWriter.writeBoolean(true);
+            }
+            stream.write(..hprose.TagEnd);
+            var result = null;
+            var errstr = null;
+            try {
+                var ok, data = call(outputFilter, owner.filter, tostring(stream));
+                ok, data = call(send, owner, data);
+                ok, data = call(inputFilter, owner.filter, data);
+                stream = ..hprose.InputStream(data);
+                if (resultMode == ..hprose.RawWithEndTag) {
+                    result = stream.readall();
+                    return;
+                }
+                if (resultMode == ..hprose.Raw) {
+                    result = stream.readall();
+                    result = ..string.left(result, #result - 1);
+                    return;
+                }
+                var hproseReader = ..hprose.Reader(stream);
+                while (true) {
+                    var tag = stream.getc();
+                    select(tag) {
+                        case ..hprose.TagResult {
+                            if (resultMode == ..hprose.Serialized) {
+                                s = hproseReader.readRaw()
+                                result = tostring(s);
+                            }
+                            else {
+                                hproseReader.reset();
+                                result = hproseReader.unserialize();
+                            }
+                        }
+                        case ..hprose.TagArgument {
+                            hproseReader.reset();
+                            a = hproseReader.readList();
+                            for (i = 1; #args; 1) {
+                                args[[i]] = a[[i]];
+                            }
+                        }
+                        case ..hprose.TagError {
+                            hproseReader.reset()
+                            errstr = hproseReader.readString();
+                        }
+                        case ..hprose.TagEnd {
+                            break;
+                        }
+                        else {
+                        	error('Wrong Response:\r\n' ++ data);
+                        }
+                    }
+                }
+            }
+            catch(e) {
+                errstr = e;
+            }
+            if (errstr != null) error(errstr);
+            return result;
+        }
+        @{
+            _get = function(name) {
+                return ..hprose.DynamicMethod(this, name);
+            }
+        }
+    }
+
+    cookieManagerID = "a6e9e45d-5cee-4695-9b60-8645fa63ea9a";
+    var cookieManager = ..thread.table(..hprose.cookieManagerID);
+    if (!cookieManager.data) {
+        cookieManager.data = ..table.tostring({});
+        cookieManager.getCookie = function(host, path, secure) {
+            import thread.table;
+            var cookies = {};
+            ..thread.lock(..hprose.cookieManagerID);
+            var cookieManager = ..thread.table(..hprose.cookieManagerID);
+            var data = eval(cookieManager.data);
+            for (domain, domainCookie in data) {
+                if (..string.indexAny(host, domain)) {
+                    var names = {};
+                    for (name, cookie in domainCookie) {
+                        if (cookie['EXPIRES'] && (tonumber(..time(), 10)) > (tonumber(cookie['EXPIRES'], 10))) {
+                            ..table.push(names, name);
+                        }
+                        else if (..string.indexAny(path, cookie['PATH']) === 1) {
+                            if (((secure && cookie['SECURE']) ||
+                                 !cookie['SECURE']) && (cookie['value'] !== null)) {
+                                ..table.push(cookies, cookie['name'] + '=' + cookie['value']);
+                            }
+                        }
+                    }
+                    for (i = 1; #names; 1) {
+                        data[domain][names[i]] = null;
+                    }
+                }
+            }
+            cookieManager.data = ..table.tostring(data);
+            ..thread.unlock(..hprose.cookieManagerID);
+            if (#cookies > 0) {
+                return ..string.join(cookies, '; ');
+            }
+            return '';
+        };
+        cookieManager.setCookie = function(cookieList, host) {
+            import thread.table;
+            ..thread.lock(..hprose.cookieManagerID);
+            var cookieManager = ..thread.table(..hprose.cookieManagerID);
+            var data = eval(cookieManager.data);
+            for (i = 1; #cookieList; 1) {
+                var cookies = ..string.split(..string.trim(cookieList[i]), ';');
+                var cookie = {};
+                var cookieStr = ..string.trim(cookies[[1]]);
+                var pos = ..string.indexAny(cookieStr, '=');
+                cookie['name'] = ..string.left(cookieStr, pos - 1);
+                cookie['value'] = ..string.right(cookieStr, #cookieStr - pos);
+                for (i = 2; #cookies; 1) {
+                    cookieStr = ..string.trim(cookies[[i]]);
+                    pos = ..string.indexAny(cookieStr, '=');
+                    cookie[..string.upper(..string.left(cookieStr, pos - 1))] = ..string.right(cookieStr, #cookieStr - pos);
+                }
+                // Tomcat can return SetCookie2 with path wrapped in "
+                if (cookie['PATH']) {
+                    if (cookie['PATH'][1] == '"') {
+                        cookie['PATH'] = string.right(cookie['PATH'], #cookie['PATH'] - 1);
+                    }
+                    if (cookie['PATH'][#cookie['PATH'] - 1] == '"') {
+                        cookie['PATH'] = string.left(cookie['PATH'], #cookie['PATH'] - 1);
+                    }
+                }
+                else {
+                    cookie['PATH'] = '/';
+                }
+                if (cookie['EXPIRES']) {
+                    cookie['EXPIRES'] = ..time(cookie['EXPIRES'], '%a, %d-%b-%Y %H:%M:%S %Z');
+                }
+                if (cookie['DOMAIN']) {
+                    cookie['DOMAIN'] = ..string.lower(cookie['DOMAIN']);
+                }
+                else {
+                    cookie['DOMAIN'] = host;
+                }
+                cookie['SECURE'] = (cookie['SECURE'] !== null);
+                if (!data[cookie['DOMAIN']]) {
+                    data[cookie['DOMAIN']] = {};
+                }
+                data[cookie['DOMAIN']][cookie['name']] = cookie;
+            }
+            cookieManager.data = ..table.tostring(data);
+            ..thread.unlock(..hprose.cookieManagerID);
+        };
+    }
+
+    class HttpClient {
+        ctor(uri) {
+            this = ..hprose.Client(uri);
+            this.headers = {};
+            this.proxy = '';
+            this.proxyBypass = '';
+            this.timeout = 30000;
+            this.keepAlive = false;
+            this.keepAliveTimeout = 300;
+            this.user = '';
+            this.pass = '';
+        };
+        send = function(data) {
+            var cookieManager = ..thread.table(..hprose.cookieManagerID);
+            var getCookie = cookieManager.get('getCookie');
+            var setCookie = cookieManager.get('setCookie');
+            var uri = owner.uri;
+            var scheme = ..string.trim(..inet.urlpart.getScheme(uri), '\0');
+            var host = ..string.trim(..inet.urlpart.getHost(uri), '\0');
+            var user = ..string.trim(..inet.urlpart.getUser(uri) || '', '\0');
+            var pass = ..string.trim(..inet.urlpart.getPassword(uri) || '', '\0');
+            var schemeandhost = scheme ++ '://' ++ host;
+            var path = ..string.sub(uri, #schemeandhost + 1, #uri);
+            var http = ..inet.whttp( ,proxy, proxyBypass);
+            var ok, err, code = http.beginRequest(uri, 'POST');
+            if (!ok) error(code ++ ':' ++ err);
+            http.headers = ..string.join(owner.headers, '\r\n');
+            http.headers += 'Content-Type: application/hprose\r\n';
+            var cookie = getCookie(host, path, scheme == "https");
+            if (cookie) {
+                http.headers += 'Cookie: ' ++ cookie ++ '\r\n';
+            }
+            if (owner.keepAlive) {
+                http.headers += 'Connection: keep-alive\r\nKeep-Alive: ' ++ owner.keepAliveTimeout + '\r\n';
+            }
+            else {
+                http.headers += 'Connection: close\r\n';
+            }
+            http.setTimeouts(owner.timeout, owner.timeout, owner.timeout);
+            if (owner.user) {
+                http.setAuth(owner.user, owner.pass);
+            }
+            elseif (user) {
+                http.setAuth(user, pass);
+            }
+            var ok, status, total = http.send(data);
+            if (!ok) error(total ++ ":" + status);
+            if (status == 200) {
+                var cookies = {};
+                do {
+                    var next = 1;
+                    var cookie, next = http.readHeader('Set-Cookie', next);
+                    ..table.push(cookies, cookie);
+                } while (next);
+                setCookie(cookies, host);
+            }
+            var tbuffer = {};
+            for(str, size in http.eachRead()) {
+                ..table.push(tbuffer, str);
+            }
+            data =  ..string.join(tbuffer);
+            http.endRequest();
+            return data;
+        };
+    }
+}
