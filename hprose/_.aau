@@ -32,7 +32,7 @@ namespace hprose {
     Serialized = 1;
     Raw = 2;
     RawWithEndTag = 3;
-    
+
     class Filter {
         ctor() {};
         inputFilter = function(data) {
@@ -1000,7 +1000,7 @@ namespace hprose {
             var refcount = 0;
         };
         set = function(val) {
-        	ref[[val]] =  refcount;
+            ref[[val]] =  refcount;
             refcount += 1;
         };
         write = function(stream, val) {
@@ -1470,7 +1470,7 @@ namespace hprose {
                             break;
                         }
                         else {
-                        	error('Wrong Response:\r\n' ++ data);
+                            error('Wrong Response:\r\n' ++ data);
                         }
                     }
                 }
@@ -1580,7 +1580,7 @@ namespace hprose {
             this.proxy = '';
             this.proxyBypass = '';
             this.timeout = 30000;
-            this.keepAlive = false;
+            this.keepAlive = true;
             this.keepAliveTimeout = 300;
             this.user = '';
             this.pass = '';
