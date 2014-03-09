@@ -21,10 +21,11 @@
 \**********************************************************/
 
 import inet.whttp;
-import inet.urlpart;
+import inet.url;
 import thread.table;
 import thread.command;
 import thread.manage;
+import wsock.tcp.client;
 
 namespace hprose {
 
@@ -913,7 +914,7 @@ namespace hprose {
         return false;
     };
     var isInt32 = function(value) {
-        return (value >= -2147483648) && (value <= 2147483647) && (math.floor(value) === value);
+        return (value >= -2147483648) && (value <= 2147483647) && (..math.floor(value) === value);
     };
     var getClassName = function(obj) {
         var typename = obj@._type;
@@ -1101,14 +1102,14 @@ namespace hprose {
             }
         };
         writeDateTimeWithRef = function(date) {
-            if (!refer.write(date)) this.writeDateTime(date);
+            if (!refer.write(stream, date)) this.writeDateTime(date);
         };
         writeBytes = function(bytes) {
             refer.set(bytes);
             stream.write(..hprose.TagBytes, (#bytes : ''), ..hprose.TagQuote, bytes, ..hprose.TagQuote);
         };
         writeBytesWithRef = function(bytes) {
-            if (!refer.write(bytes)) this.writeBytes(bytes);
+            if (!refer.write(stream, bytes)) this.writeBytes(bytes);
         }
         writeUTF8Char = function(c) {
             stream.write(..hprose.TagUTF8Char, c);
@@ -1120,7 +1121,7 @@ namespace hprose {
             stream.write(..hprose.TagString, (len : ''), ..hprose.TagQuote, str, ..hprose.TagQuote);
         };
         writeStringWithRef = function(str, len) {
-            if (!refer.write(str)) this.writeString(str, len);
+            if (!refer.write(stream, str)) this.writeString(str, len);
         }
         writeList = function(list) {
             refer.set(list);
@@ -1132,7 +1133,7 @@ namespace hprose {
             stream.write(..hprose.TagClosebrace);
         };
         writeListWithRef = function(list) {
-            if (!refer.write(list)) this.writeList(list);
+            if (!refer.write(stream, list)) this.writeList(list);
         }
         writeMap = function(map) {
             refer.set(map);
@@ -1153,7 +1154,7 @@ namespace hprose {
             stream.write(..hprose.TagClosebrace);
         };
         writeMapWithRef = function(map) {
-            if (!refer.write(map)) this.writeMap(map);
+            if (!refer.write(stream, map)) this.writeMap(map);
         }
         writeObject = function(obj) {
             var classname = getClassName(obj);
@@ -1182,7 +1183,7 @@ namespace hprose {
             stream.write(..hprose.TagClosebrace);
         };
         writeObjectWithRef = function(obj) {
-            if (!refer.write(obj)) this.writeObject(obj);
+            if (!refer.write(stream, obj)) this.writeObject(obj);
         };
         writeClass = function(classname, fields) {
             var count = #fields;
@@ -1345,32 +1346,20 @@ namespace hprose {
                 if (type(onerror) != type.function) {
                     error("onerror must be a function.");
                 }
-                var tab = ..thread.table("f9ccdb4e-61c8-4dc3-8bbb-0963910e42de");
-                tab.set('hproseClient', owner);
-                tab.set('syncInvoke', owner.syncInvoke);
-                tab.set('send', owner.send);
-                tab.set('inputFilter', owner.filter.inputFilter);
-                tab.set('outputFilter', owner.filter.outputFilter);
                 var command = ..thread.command();
                 command.callback = callback;
                 command.onerror = onerror;
-                threadManager.create(function(name, args, callback, onerror, byRef, resultMode, simple, hwnd) {
+                threadManager.create(function(syncInvoke, client, name, args, callback, onerror, byRef, resultMode, simple, send, inputFilter, outputFilter, hwnd) {
                     import hprose;
-                    import inet.whttp;
-                    import inet.urlpart;
-                    import thread.table;
-                    import thread.command;
-
                     var errstr = null;
-                    var tab = ..thread.table('f9ccdb4e-61c8-4dc3-8bbb-0963910e42de');
-                    var ok, result = call(tab.get('syncInvoke'), tab.get('hproseClient'), name, args, byRef, resultMode, simple, tab.get('send'), tab.get('inputFilter'), tab.get('outputFilter'));
+                    var ok, result = call(syncInvoke, client, name, args, byRef, resultMode, simple, send, inputFilter, outputFilter);
                     if (ok) {
                         ..thread.command.post(hwnd, "callback", result, args);
                     }
                     else {
                         ..thread.command.post(hwnd, "onerror", name, result);
                     }
-                }, name, args, callback, onerror, byRef, resultMode, simple, command._form.hwnd);
+                }, owner.syncInvoke, owner, name, args, callback, onerror, byRef, resultMode, simple, owner.send, owner.filter.inputFilter, owner.filter.outputFilter, command._form.hwnd);
             }
         };
         useService = function(uri) {
@@ -1452,16 +1441,27 @@ namespace hprose {
         }
     }
 
+    namespace client {
+        create = function(uri) {
+            var u = ..inet.url.split(uri);
+            var scheme = u.scheme;
+            if (scheme == "http" || scheme == "https") {
+                return ..hprose.HttpClient(uri);
+            }
+            if (scheme == "tcp" || scheme == "tcp4" || scheme == "tcp6") {
+                return ..hprose.TcpClient(uri);
+            }
+            error("The " ++ scheme ++ " client isn't implemented.");
+        }
+    }
+
     cookieManagerID = "a6e9e45d-5cee-4695-9b60-8645fa63ea9a";
-    var cookieManager = ..thread.table(..hprose.cookieManagerID);
-    if (!cookieManager.data) {
-        cookieManager.data = ..table.tostring({});
-        cookieManager.getCookie = function(host, path, secure) {
-            import thread.table;
+    cookieManager = {
+        data = {};
+        getCookie = function(host, path, secure) {
             var cookies = {};
             ..thread.lock(..hprose.cookieManagerID);
-            var cookieManager = ..thread.table(..hprose.cookieManagerID);
-            var data = eval(cookieManager.data);
+            var data = ..hprose.cookieManager.data;
             for (domain, domainCookie in data) {
                 if (..string.indexAny(host, domain)) {
                     var names = {};
@@ -1481,18 +1481,15 @@ namespace hprose {
                     }
                 }
             }
-            cookieManager.data = ..table.tostring(data);
             ..thread.unlock(..hprose.cookieManagerID);
             if (#cookies > 0) {
                 return ..string.join(cookies, '; ');
             }
             return '';
         };
-        cookieManager.setCookie = function(cookieList, host) {
-            import thread.table;
+        setCookie = function(cookieList, host) {
             ..thread.lock(..hprose.cookieManagerID);
-            var cookieManager = ..thread.table(..hprose.cookieManagerID);
-            var data = eval(cookieManager.data);
+            var data = ..hprose.cookieManager.data;
             for (i = 1; #cookieList; 1) {
                 var cookies = ..string.split(..string.trim(cookieList[i]), ';');
                 var cookie = {};
@@ -1532,7 +1529,6 @@ namespace hprose {
                 }
                 data[cookie['DOMAIN']][cookie['name']] = cookie;
             }
-            cookieManager.data = ..table.tostring(data);
             ..thread.unlock(..hprose.cookieManagerID);
         };
     }
@@ -1550,18 +1546,16 @@ namespace hprose {
             this.pass = '';
         };
         send = function(data) {
-            var cookieManager = ..thread.table(..hprose.cookieManagerID);
-            var getCookie = cookieManager.get('getCookie');
-            var setCookie = cookieManager.get('setCookie');
-            var uri = owner.uri;
-            var scheme = ..string.trim(..inet.urlpart.getScheme(uri), '\0');
-            var host = ..string.trim(..inet.urlpart.getHost(uri), '\0');
-            var user = ..string.trim(..inet.urlpart.getUser(uri) || '', '\0');
-            var pass = ..string.trim(..inet.urlpart.getPassword(uri) || '', '\0');
-            var schemeandhost = scheme ++ '://' ++ host;
-            var path = ..string.sub(uri, #schemeandhost + 1, #uri);
+            var getCookie = ..hprose.cookieManager.getCookie;
+            var setCookie = ..hprose.cookieManager.setCookie;
+            var u = ..inet.url.split(owner.uri);
+            var scheme = u.scheme;
+            var host = u.host;
+            var user = u.user;
+            var pass = u.password;
+            var path = u.path;
             var http = ..inet.whttp( ,proxy, proxyBypass);
-            var ok, err, code = http.beginRequest(uri, 'POST');
+            var ok, err, code = http.beginRequest(owner.uri, 'POST');
             if (!ok) error(code ++ ':' ++ err);
             http.headers = ..string.join(owner.headers, '\r\n');
             http.headers += 'Content-Type: application/hprose\r\n';
@@ -1602,11 +1596,140 @@ namespace hprose {
             return data;
         };
     }
+
+    TcpEntryFree = 0;
+    TcpEntryUsing = 1;
+    TcpEntryClosing = 2;
+
+    TcpPoolID = "46ae4c35-805e-457e-ae29-41b5bd5ea2ae";
+    TcpPool = {
+        get = function(uri) {
+            import thread.table;
+            ..thread.lock(..hprose.TcpPoolID);
+            var tcpPool = ..hprose.TcpPool;
+            var entry;
+            for (i = 1; #tcpPool; 1) {
+                entry = tcpPool[[i]];
+                if (entry.status === ..hprose.TcpEntryFree) {
+                    if (entry.uri === uri) {
+                        entry.status = ..hprose.TcpEntryUsing;
+                        ..thread.unlock(..hprose.TcpPoolID);
+                        return entry;
+                    }
+                    else if (entry.uri === "") {
+                        entry.status = ..hprose.TcpEntryUsing;
+                        entry.uri = uri;
+                        ..thread.unlock(..hprose.TcpPoolID);
+                        return entry;
+                    }
+                }
+            }
+            entry = {uri = uri; client = null; status = ..hprose.TcpEntryUsing};
+            ..table.push(tcpPool, entry);
+            ..thread.unlock(..hprose.TcpPoolID);
+            return entry;
+        };
+
+        _freeClients = function(clients) {
+            for (i = 1; #clients; 1) {
+                var client = clients[[i]];
+                if (client !== null) {
+                    client.close();
+                }
+            }
+        }
+
+        close = function(uri) {
+            import thread.table;
+            ..thread.lock(..hprose.TcpPoolID);
+            var tcpPool = ..hprose.TcpPool;
+            var clients = {}
+            for (i = 1; #tcpPool; 1) {
+                var entry = tcpPool[[i]];
+                if (entry.uri === uri) {
+                    if (entry.status === ..hprose.TcpEntryFree) {
+                        ..table.push(clients, entry.client);
+                        entry.client = null;
+                        entry.uri = "";
+                    }
+                    else {
+                        entry.status = ..hprose.TcpEntryClose;
+                    }
+                }
+            }
+            ..thread.unlock(..hprose.TcpPoolID);
+            ..hprose.TcpPool._freeClients(clients);
+        };
+
+        free = function(entry) {
+            if (entry.status === ..hprose.TcpEntryClosing) {
+                if (entry.client !== null) {
+                    ..hprose.TcpPool._freeClients({entry.client});
+                    entry.client = null;
+                }
+                entry.uri = ""
+            }
+            entry.status = ..hprose.TcpEntryFree;
+        };
+
+        // for old AAuto Quicker version, the new version is fixed this bug
+        read = function(entry, sizeMax) {
+            var tab = {}
+            var len = 0;
+            for(str,size in entry.client.eachRead(sizeMax) ){
+                ..table.push(tab,str);
+                len += size;
+                if (len === sizeMax) break;
+            }
+            return ..string.join(tab);
+        };
+    };
+
+    class TcpClient {
+        ctor(uri) {
+            this = ..hprose.Client(uri);
+        };
+
+        send = function(data) {
+            var tcpEntry = ..hprose.TcpPool.get(uri);
+            if (tcpEntry.client === null) {
+                tcpEntry.client = ..wsock.tcp.client();
+                var u = ..inet.url.split(owner.uri);
+                var host = u.host;
+                var port = u.port;
+                tcpEntry.client.connect(host, port);
+            }
+            try {
+                var n = #data;
+                data = ..string.join({..string.pack(n >>> 24 & 0xff, n >>> 16 & 0xff, n >>> 8 & 0xff, n & 0xff); data});
+                tcpEntry.client.write(data);
+                var buf = ..hprose.TcpPool.read(tcpEntry, 4);
+                n = buf[1] << 24 | buf[2] << 16 | buf[3] << 8 | buf[4];
+                data = ..hprose.TcpPool.read(tcpEntry, n);
+            }
+            catch (e) {
+                tcpEntry.status = ..hprose.Closing;
+            }
+            ..hprose.TcpPool.free(tcpEntry);
+            return data;
+        };
+        close = function() {
+            ..hprose.TcpPool.close(uri);
+        };
+    }
 }
 
 /**intellisense()
 hprose = 高性能远程对象服务引擎
-hprose.HttpClient("__/*服务端网址*/") = 创建客户端
+hprose.client.create("__/*服务端网址*/") = 创建客户端
+hprose.client.create() = !hproseClient.
+!hproseClient.服务器函数名() = @.__/*服务端函数名*/
+hprose.HttpClient("__/*服务端网址*/") = 创建Http客户端
 hprose.HttpClient() = !hproseHttpClient.
-!hproseHttpClient.服务端函数名() = @.__/*服务端函数名*/ 
-end intellisense**/ 
+!hproseHttpClient.服务端函数名() = @.__/*服务端函数名*/
+hprose.TcpClient("__/*服务端网址*/") = 创建Tcp客户端
+hprose.TcpClient() = !hproseTcpClient.
+!hproseTcpClient.服务端函数名() = @.__/*服务端函数名*/
+hprose.serialize(__) = 序列化，第二个参数表示是否开启简单模式，默认为否
+hprose.unserialize(__) = 反序列化，第二个参数表示是否开启简单模式，默认为否
+end intellisense**/
