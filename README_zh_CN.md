@@ -51,7 +51,7 @@ import hprose;
 
 io.open();
 
-var client = hprose.HttpClient("http://hprose.com/example/");
+var client = hprose.client.create("http://hprose.com/example/");
 io.print(client.hello("world"));
 
 execute("pause")
@@ -79,7 +79,7 @@ edit={cls="edit";left=45;top=39;right=269;bottom=177;edge=1;multiline=1;z=2}
 /*}}*/
 
 winform.button.oncommand = function(id,event){
-    var client = hprose.HttpClient("http://hprose.com/example/");
+    var client = hprose.client.create("http://hprose.com/example/");
     client.hello("async world", function(result) {
         winform.edit.text = 'result: \r\n' ++ result;
     }, function(name, err) {
