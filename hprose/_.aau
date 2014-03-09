@@ -15,7 +15,7 @@
  *                                                        *
  * Hprose library for AAuto Quicker                       *
  *                                                        *
- * LastModified: Feb 14, 2014                             *
+ * LastModified: Mar 9, 2014                              *
  * Author: Ma Bingyao <andot@hprose.com>                  *
  *                                                        *
 \**********************************************************/
@@ -445,13 +445,13 @@ namespace hprose {
                     return tag[1] - 48;
                 }
                 case ..hprose.TagInteger {
-                    return this.readIntegerWithoutTag();
+                    return this._readIntegerWithoutTag();
                 }
                 case ..hprose.TagLong {
-                    return this.readLongWithoutTag();
+                    return this._readLongWithoutTag();
                 }
                 case ..hprose.TagDouble {
-                    return this.readDoubleWithoutTag();
+                    return this._readDoubleWithoutTag();
                 }
                 case ..hprose.TagNull {
                     return null;
@@ -469,7 +469,7 @@ namespace hprose {
                     return NaN;
                 }
                 case ..hprose.TagInfinity {
-                    return this.readInfinityWithoutTag();
+                    return this._readInfinityWithoutTag();
                 }
                 case ..hprose.TagDate {
                     return this.readDateWithoutTag();
@@ -481,7 +481,7 @@ namespace hprose {
                     return this.readBytesWithoutTag();
                 }
                 case ..hprose.TagUTF8Char {
-                    return this.readUTF8CharWithoutTag();
+                    return stream.readUTF8String(1);
                 }
                 case ..hprose.TagString {
                     return this.readStringWithoutTag();
@@ -503,7 +503,7 @@ namespace hprose {
                     return this.readObjectWithoutTag();
                 }
                 case ..hprose.TagRef {
-                    return this.readRef();
+                    return this._readRef();
                 }
                 case ..hprose.TagError {
                     error(this.readString());
@@ -513,7 +513,7 @@ namespace hprose {
                 }
             }
         };
-        readIntegerWithoutTag = function() {
+        _readIntegerWithoutTag = function() {
             return readNumber(stream, ..hprose.TagSemicolon);
         };
         readInteger = function() {
@@ -523,14 +523,14 @@ namespace hprose {
                     return tag[1] - 48;
                 }
                 case ..hprose.TagInteger {
-                    return this.readIntegerWithoutTag();
+                    return this._readIntegerWithoutTag();
                 }
                 else {
                     this.unexpectedTag(tag);
                 }
             }
         };
-        readLongWithoutTag = function() {
+        _readLongWithoutTag = function() {
             return stream.readuntil(..hprose.TagSemicolon);
         };
         readLong = function() {
@@ -540,14 +540,14 @@ namespace hprose {
                     return tag;
                 }
                 case ..hprose.TagInteger, ..hprose.TagLong {
-                    return this.readLongWithoutTag();
+                    return this._readLongWithoutTag();
                 }
                 else {
                     this.unexpectedTag(tag);
                 }
             }
         };
-        readDoubleWithoutTag = function() {
+        _readDoubleWithoutTag = function() {
             return readNumber(stream, ..hprose.TagSemicolon);
         };
         readDouble = function() {
@@ -557,69 +557,25 @@ namespace hprose {
                     return tag[1] - 48;
                 }
                 case ..hprose.TagInteger, ..hprose.TagLong, ..hprose.TagDouble {
-                    return this.readDoubleWithoutTag();
+                    return this._readDoubleWithoutTag();
                 }
                 case ..hprose.TagNaN {
                     return NaN;
                 }
                 case ..hprose.TagInfinity {
-                    return this.readInfinityWithoutTag();
+                    return this._readInfinityWithoutTag();
                 }
                 else {
                     this.unexpectedTag(tag);
                 }
             }
         };
-        readNaN = function() {
-            var tag = stream.getc();
-            select(tag) {
-                case ..hprose.TagNaN {
-                    return NaN;
-                }
-                else {
-                    this.unexpectedTag(tag);
-                }
-            }
-        };
-        readInfinityWithoutTag = function() {
+        _readInfinityWithoutTag = function() {
             if (stream.getc() == ..hprose.TagNeg) {
                 return -Inf;
             }
             else {
                 return Inf;
-            }
-        };
-        readInfinity = function() {
-            var tag = stream.getc();
-            select(tag) {
-                case ..hprose.TagInfinity {
-                    return this.readInfinityWithoutTag();
-                }
-                else {
-                    this.unexpectedTag(tag);
-                }
-            }
-        };
-        readNull = function() {
-            var tag = stream.getc();
-            select(tag) {
-                case ..hprose.TagNull {
-                    return null;
-                }
-                else {
-                    this.unexpectedTag(tag);
-                }
-            }
-        };
-        readEmpty = function() {
-            var tag = stream.getc();
-            select(tag) {
-                case ..hprose.TagEmpty {
-                    return '';
-                }
-                else {
-                    this.unexpectedTag(tag);
-                }
             }
         };
         readBoolean = function() {
@@ -687,8 +643,11 @@ namespace hprose {
         readDate = function() {
             var tag = stream.getc();
             select(tag) {
+                case ..hprose.TagNull {
+                    return null;
+                }
                 case ..hprose.TagRef {
-                    return this.readRef();
+                    return this._readRef();
                 }
                 case ..hprose.TagDate {
                     return this.readDateWithoutTag();
@@ -737,8 +696,11 @@ namespace hprose {
         readTime = function() {
             var tag = stream.getc();
             select(tag) {
+                case ..hprose.TagNull {
+                    return null;
+                }
                 case ..hprose.TagRef {
-                    return this.readRef();
+                    return this._readRef();
                 }
                 case ..hprose.TagTime {
                     return this.readTimeWithoutTag();
@@ -758,25 +720,17 @@ namespace hprose {
         readBytes = function() {
             var tag = stream.getc();
             select(tag) {
+                case ..hprose.TagNull {
+                    return null;
+                }
+                case ..hprose.TagEmpty {
+                    return '';
+                }
                 case ..hprose.TagRef {
-                    return this.readRef();
+                    return this._readRef();
                 }
                 case ..hprose.TagBytes {
                     return this.readBytesWithoutTag();
-                }
-                else {
-                    this.unexpectedTag(tag);
-                }
-            }
-        };
-        readUTF8CharWithoutTag = function() {
-            return stream.readUTF8String(1);
-        };
-        readUTF8Char = function() {
-            var tag = stream.getc();
-            select(tag) {
-                case ..hprose.TagUTF8Char {
-                    return this.readUTF8CharWithoutTag();
                 }
                 else {
                     this.unexpectedTag(tag);
@@ -797,8 +751,17 @@ namespace hprose {
         readString = function() {
             var tag = stream.getc();
             select(tag) {
+                case ..hprose.TagNull {
+                    return null;
+                }
+                case ..hprose.TagEmpty {
+                    return '';
+                }
+                case ..hprose.TagUTF8Char {
+                    return stream.readUTF8String(1);
+                }
                 case ..hprose.TagRef {
-                    return this.readRef();
+                    return this._readRef();
                 }
                 case ..hprose.TagString {
                     return this.readStringWithoutTag();
@@ -818,8 +781,11 @@ namespace hprose {
         readGuid = function() {
             var tag = stream.getc();
             select(tag) {
+                case ..hprose.TagNull {
+                    return null;
+                }
                 case ..hprose.TagRef {
-                    return this.readRef();
+                    return this._readRef();
                 }
                 case ..hprose.TagGuid {
                     return this.readGuidWithoutTag();
@@ -842,8 +808,11 @@ namespace hprose {
         readList = function() {
             var tag = stream.getc();
             select(tag) {
+                case ..hprose.TagNull {
+                    return null;
+                }
                 case ..hprose.TagRef {
-                    return this.readRef();
+                    return this._readRef();
                 }
                 case ..hprose.TagList {
                     return this.readListWithoutTag();
@@ -868,8 +837,11 @@ namespace hprose {
         readMap = function() {
             var tag = stream.getc();
             select(tag) {
+                case ..hprose.TagNull {
+                    return null;
+                }
                 case ..hprose.TagRef {
-                    return this.readRef();
+                    return this._readRef();
                 }
                 case ..hprose.TagMap {
                     return this.readMapWithoutTag();
@@ -892,8 +864,11 @@ namespace hprose {
         readObject = function() {
             var tag = stream.getc();
             select(tag) {
+                case ..hprose.TagNull {
+                    return null;
+                }
                 case ..hprose.TagRef {
-                    return this.readRef();
+                    return this._readRef();
                 }
                 case ..hprose.TagClass {
                     this.readClass();
@@ -921,7 +896,7 @@ namespace hprose {
             clsinfo[["fields"]] = fields;
             classref[[#classref + 1]] = clsinfo;
         };
-        readRef = function() {
+        _readRef = function() {
             return refer.read(readNumber(stream, ..hprose.TagSemicolon) + 1);
         };
         reset = function() {
@@ -934,22 +909,11 @@ namespace hprose {
             case 0;9 {
                 return true;
             }
-            case '0';'9' {
-                return true;
-            }
         }
         return false;
     };
-    var isInteger = function(value) {
-        for (i = (value[[1]] == '-' ? 2 : 1); #value; 1) {
-            if (!isDigit(value[[i]])) return false;
-        }
-        return (value != '-');
-    };
     var isInt32 = function(value) {
-        var s = tostring(value);
-        var l = #s;
-        return ((l < 12) && isInteger(s) && !(value < -2147483648 || value > 2147483647));
+        return (value >= -2147483648) && (value <= 2147483647) && (math.floor(value) === value);
     };
     var getClassName = function(obj) {
         var typename = obj@._type;
@@ -1639,3 +1603,10 @@ namespace hprose {
         };
     }
 }
+
+/**intellisense()
+hprose = 高性能远程对象服务引擎
+hprose.HttpClient("__/*服务端网址*/") = 创建客户端
+hprose.HttpClient() = !hproseHttpClient.
+!hproseHttpClient.服务端函数名() = @.__/*服务端函数名*/ 
+end intellisense**/ 
