@@ -15,7 +15,7 @@
  *                                                        *
  * Hprose library for AAuto Quicker                       *
  *                                                        *
- * LastModified: Mar 9, 2014                              *
+ * LastModified: Mar 11, 2014                             *
  * Author: Ma Bingyao <andot@hprose.com>                  *
  *                                                        *
 \**********************************************************/
@@ -1709,6 +1709,8 @@ namespace hprose {
             }
             catch (e) {
                 tcpEntry.status = ..hprose.Closing;
+                ..hprose.TcpPool.free(tcpEntry);
+                error(e)
             }
             ..hprose.TcpPool.free(tcpEntry);
             return data;
