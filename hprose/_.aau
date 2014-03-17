@@ -15,7 +15,7 @@
  *                                                        *
  * Hprose library for AAuto Quicker                       *
  *                                                        *
- * LastModified: Mar 11, 2014                             *
+ * LastModified: Mar 17, 2014                             *
  * Author: Ma Bingyao <andot@hprose.com>                  *
  *                                                        *
 \**********************************************************/
@@ -36,10 +36,10 @@ namespace hprose {
 
     class Filter {
         ctor() {};
-        inputFilter = function(data) {
+        inputFilter = function(data, context) {
             return data;
         };
-        outputFilter = function(data) {
+        outputFilter = function(data, context) {
             return data;
         };
     }
@@ -1381,9 +1381,9 @@ namespace hprose {
             var result = null;
             var errstr = null;
             try {
-                var ok, data = call(outputFilter, owner.filter, tostring(stream));
+                var ok, data = call(outputFilter, owner.filter, tostring(stream), owner);
                 ok, data = call(send, owner, data);
-                ok, data = call(inputFilter, owner.filter, data);
+                ok, data = call(inputFilter, owner.filter, data, owner);
                 stream = ..hprose.InputStream(data);
                 if (resultMode == ..hprose.RawWithEndTag) {
                     result = stream.readall();
