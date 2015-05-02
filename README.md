@@ -1,5 +1,7 @@
 # Hprose for AAuto Quicker
 
+[![Join the chat at https://gitter.im/hprose/hprose-aauto](https://badges.gitter.im/Join%20Chat.svg)](https://gitter.im/hprose/hprose-aauto?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge&utm_content=badge)
+
 >---
 - **[Introduction](#introduction)**
 - **[Usage](#usage)**
