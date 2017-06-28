@@ -14,7 +14,7 @@
  *                                                        *
  * Hprose library for AAuto Quicker                       *
  *                                                        *
- * LastModified: Jun 15, 2016                             *
+ * LastModified: Jun 28, 2017                             *
  * Author: Ma Bingyao <andot@hprose.com>                  *
  *                                                        *
 \**********************************************************/
@@ -1506,10 +1506,10 @@ namespace hprose {
                 // Tomcat can return SetCookie2 with path wrapped in "
                 if (cookie['PATH']) {
                     if (cookie['PATH'][1] == '"') {
-                        cookie['PATH'] = string.right(cookie['PATH'], #cookie['PATH'] - 1);
+                        cookie['PATH'] = ..string.right(cookie['PATH'], #cookie['PATH'] - 1);
                     }
                     if (cookie['PATH'][#cookie['PATH'] - 1] == '"') {
-                        cookie['PATH'] = string.left(cookie['PATH'], #cookie['PATH'] - 1);
+                        cookie['PATH'] = ..string.left(cookie['PATH'], #cookie['PATH'] - 1);
                     }
                 }
                 else {
@@ -1558,7 +1558,9 @@ namespace hprose {
             var http = ..inet.whttp( ,proxy, proxyBypass);
             var ok, err, code = http.beginRequest(owner.uri, 'POST');
             if (!ok) error(code ++ ':' ++ err);
-            http.headers = ..string.join(owner.headers, '\r\n');
+            for (i = 1; #owner.headers; 1) {
+                http.headers += owner.headers[i] ++ '\r\n';
+            }
             http.headers += 'Content-Type: application/hprose\r\n';
             var cookie = getCookie(host, path, scheme == "https");
             if (cookie) {
