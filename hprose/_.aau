@@ -14,7 +14,7 @@
  *                                                        *
  * Hprose library for AAuto Quicker                       *
  *                                                        *
- * LastModified: Jun 28, 2017                             *
+ * LastModified: Dec 14, 2018                             *
  * Author: Ma Bingyao <andot@hprose.com>                  *
  *                                                        *
 \**********************************************************/
@@ -1556,6 +1556,7 @@ namespace hprose {
             var pass = u.password;
             var path = u.path;
             var http = ..inet.whttp( ,proxy, proxyBypass);
+            http.setTimeouts(owner.timeout, owner.timeout, owner.timeout);
             var ok, err, code = http.beginRequest(owner.uri, 'POST');
             if (!ok) error(code ++ ':' ++ err);
             for (i = 1; #owner.headers; 1) {
@@ -1572,7 +1573,6 @@ namespace hprose {
             else {
                 http.headers += 'Connection: close\r\n';
             }
-            http.setTimeouts(owner.timeout, owner.timeout, owner.timeout);
             if (owner.user) {
                 http.setAuth(owner.user, owner.pass);
             }
